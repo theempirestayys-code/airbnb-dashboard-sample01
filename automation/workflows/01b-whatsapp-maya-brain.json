@@ -1,0 +1,394 @@
+{
+  "name": "TES 01B · WhatsApp in → Meet's guest contact / Maya brain → reply, escalate, call",
+  "nodes": [
+    {
+      "id": "b1",
+      "name": "WhatsApp webhook · verify",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, -400],
+      "webhookId": "tes-wa-verify",
+      "parameters": { "httpMethod": "GET", "path": "tes-wa", "responseMode": "responseNode", "options": {} }
+    },
+    {
+      "id": "b2",
+      "name": "Check verify token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, -400],
+      "parameters": {
+        "jsCode": "// Must match the Verify Token you type in Meta → WhatsApp → Configuration → Webhook.\nconst VERIFY_TOKEN = 'REPLACE_WITH_A_LONG_RANDOM_STRING';\nconst q = $json.query || {};\nconst ok = q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === VERIFY_TOKEN;\nreturn [{ json: { body: ok ? String(q['hub.challenge'] || '') : 'forbidden' } }];"
+      }
+    },
+    {
+      "id": "b3",
+      "name": "Return challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [440, -400],
+      "parameters": { "respondWith": "text", "responseBody": "={{ $json.body }}", "options": {} }
+    },
+    {
+      "id": "b4",
+      "name": "WhatsApp webhook · messages",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "tes-wa-messages",
+      "parameters": { "httpMethod": "POST", "path": "tes-wa", "responseMode": "onReceived", "options": {} }
+    },
+    {
+      "id": "b5",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "// Edit once. API keys and tokens live in n8n Credentials, never here.\nconst CONFIG = {\n  MEET_WHATSAPP: '91XXXXXXXXXX',          // Meet's WhatsApp: country code + number, no +\n  MEET_PHONE_E164: '+91XXXXXXXXXX',        // number Jarvis calls for urgent items\n  WA_PHONE_NUMBER_ID: 'XXXXXXXXXXXXXXX',\n  WA_API: 'https://graph.facebook.com/v21.0',\n  SLACK_CHANNEL: 'C0AKT2RDQNA',\n  TWILIO_ACCOUNT_SID: 'ACXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',\n  TWILIO_FROM: '+1XXXXXXXXXX',             // Twilio voice number\n  N8N_PUBLIC_URL: 'https://n8n.YOUR-DOMAIN.com', // HTTPS address of this n8n (needed by Meta + Twilio)\n  MODEL_FAST: 'claude-haiku-4-5-20251001',\n  MODEL_BRAIN: 'claude-sonnet-5-5',\n  // false = Maya drafts every guest reply and Meet approves it (WhatsApp \"send\" or by voice).\n  // true  = Maya answers routine questions herself; she still escalates anything on the policy list.\n  AUTO_SEND: false\n};\nreturn $input.all().map(i => ({ json: { ...i.json, CONFIG } }));"
+      }
+    },
+    {
+      "id": "b6",
+      "name": "Read message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "parameters": {
+        "jsCode": "const C = $json.CONFIG;\nconst value = ((($json.body || {}).entry || [])[0] || {}).changes?.[0]?.value || {};\nconst m = (value.messages || [])[0];\nif (!m) return []; // delivery/read receipts: nothing to do\nconst contact = (value.contacts || [])[0] || {};\nlet text = '';\nif (m.type === 'text') text = m.text.body;\nelse if (m.type === 'image') text = m.image.caption || '';\nelse if (m.type === 'interactive') text = m.interactive.button_reply?.title || m.interactive.list_reply?.title || '';\nelse if (m.type === 'button') text = m.button.text;\nelse text = '[guest sent a ' + m.type + ' message]';\nreturn [{ json: {\n  from: m.from,\n  name: contact.profile?.name || '',\n  wa_msg_id: m.id,\n  type: m.type,\n  text,\n  image_id: m.type === 'image' ? m.image.id : null,\n  isMeet: m.from === C.MEET_WHATSAPP,\n  hasImage: m.type === 'image'\n} }];"
+      }
+    },
+    {
+      "id": "b7",
+      "name": "From Meet?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [{ "id": "c1", "leftValue": "={{ $json.isMeet }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b8",
+      "name": "Screenshot?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, -220],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 },
+          "combinator": "and",
+          "conditions": [{ "id": "c2", "leftValue": "={{ $json.hasImage }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true", "singleValue": true } }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b9",
+      "name": "WhatsApp · media URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, -340],
+      "parameters": {
+        "url": "={{ $('Config').first().json.CONFIG.WA_API }}/{{ $json.image_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      }
+    },
+    {
+      "id": "b10",
+      "name": "WhatsApp · download screenshot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, -340],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "response": { "response": { "responseFormat": "file", "outputPropertyName": "data" } } }
+      }
+    },
+    {
+      "id": "b11",
+      "name": "Prepare Meet intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, -220],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst msg = $('Read message').first().json;\nconst INSTR = [\n  'You read a message that Meet, owner of The Empire Stays (Airbnb operator, Mumbai + Thane), sent to the automation WhatsApp number.',\n  'Decide what he wants and extract details. Reply with one JSON object only:',\n  '{\"type\":\"guest_contact\"|\"decision\"|\"other\",',\n  ' \"guest_name\":string|null, \"guest_phone\":string|null, \"confirmation_code\":string|null,',\n  ' \"listing_name\":string|null, \"check_in\":\"YYYY-MM-DD\"|null, \"check_out\":\"YYYY-MM-DD\"|null,',\n  ' \"decision\":\"approve\"|\"reject\"|\"custom\"|null, \"custom_reply\":string|null}',\n  'guest_contact = he shares a guest name and/or phone number, or a screenshot of an Airbnb reservation.',\n  'guest_phone = digits only with country code, no plus; a 10-digit Indian mobile becomes 91 + number.',\n  'decision = he answers a pending escalation: approve (\"send\", \"ok\", \"go ahead\"), reject (\"hold\", \"don\\'t send\"), or custom (he dictates what to tell the guest).',\n  'For custom, write custom_reply as the final guest-facing WhatsApp message in Maya\\'s voice: warm, short, never robotic, English.'\n].join('\\n');\nlet content;\nconst it = $input.first();\nif (it.binary && it.binary.data) {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  content = [\n    { type: 'image', source: { type: 'base64', media_type: it.binary.data.mimeType || 'image/jpeg', data: buf.toString('base64') } },\n    { type: 'text', text: INSTR + (msg.text ? '\\nCaption: ' + msg.text : '') }\n  ];\n} else {\n  content = INSTR + '\\n\\nMeet wrote: ' + msg.text;\n}\nreturn [{ json: { claudeRequest: { model: C.MODEL_FAST, max_tokens: 700, messages: [{ role: 'user', content }] } } }];"
+      }
+    },
+    {
+      "id": "b12",
+      "name": "Claude · understand Meet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -220],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "anthropic-version", "value": "2023-06-01" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claudeRequest) }}",
+        "options": { "timeout": 60000 }
+      }
+    },
+    {
+      "id": "b13",
+      "name": "Parse Meet intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, -220],
+      "parameters": {
+        "jsCode": "const txt = ($json.content || []).map(c => c.text || '').join('');\nlet d = { type: 'other' };\ntry { d = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); } catch (e) {}\nif (d.guest_phone) d.guest_phone = String(d.guest_phone).replace(/\\D/g, '');\nif (d.guest_phone && d.guest_phone.length === 10) d.guest_phone = '91' + d.guest_phone;\nreturn [{ json: d }];"
+      }
+    },
+    {
+      "id": "b14",
+      "name": "Meet wants",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [2200, -220],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "renameOutput": true, "outputKey": "Guest contact", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "s1", "leftValue": "={{ $json.type }}", "rightValue": "guest_contact", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Decision", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "s2", "leftValue": "={{ $json.type }}", "rightValue": "decision", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": { "fallbackOutput": "none" }
+      }
+    },
+    {
+      "id": "b15",
+      "name": "Attach guest to booking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2420, -320],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target AS (\n  SELECT id FROM airsynk.bookings\n  WHERE (NULLIF($3, '') IS NOT NULL AND confirmation_code = NULLIF($3, ''))\n     OR (NULLIF($3, '') IS NULL AND status = 'awaiting_guest_contact')\n  ORDER BY created_at DESC LIMIT 1\n)\nUPDATE airsynk.bookings b\nSET guest_name = COALESCE(NULLIF($1, ''), b.guest_name, b.guest_first_name),\n    guest_phone = NULLIF($2, ''),\n    status = 'guest_contact_added',\n    updated_at = now()\nFROM target WHERE b.id = target.id\nRETURNING b.*;",
+        "options": { "queryReplacement": "={{ [$json.guest_name ?? '', $json.guest_phone ?? '', $json.confirmation_code ?? ''] }}" }
+      }
+    },
+    {
+      "id": "b16",
+      "name": "Build welcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, -320],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst url = C.WA_API + '/' + C.WA_PHONE_NUMBER_ID + '/messages';\nconst b = $input.first().json;\nconst meetText = t => ({ json: { kind: 'whatsapp', url, body: { messaging_product: 'whatsapp', to: C.MEET_WHATSAPP, type: 'text', text: { body: t } } } });\nif (!b || !b.id || !b.guest_phone) {\n  return [meetText('I could not match that to a booking waiting for a guest number. Please send the confirmation code with the guest name and WhatsApp number.')];\n}\nconst first = String(b.guest_name || b.guest_first_name || 'there').split(' ')[0];\nconst day = b.check_in ? new Date(b.check_in).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }) : 'your arrival day';\nreturn [\n  { json: { kind: 'whatsapp', url, body: {\n    messaging_product: 'whatsapp', to: b.guest_phone, type: 'template',\n    template: { name: 'tes_booking_welcome', language: { code: 'en' }, components: [{ type: 'body', parameters: [\n      { type: 'text', text: first }, { type: 'text', text: b.listing_name || 'your stay' }, { type: 'text', text: day }\n    ] }] }\n  } } },\n  { json: { kind: 'db', sql: \"INSERT INTO airsynk.messages (phone, direction, body) VALUES ($1, 'out', $2)\", params: [b.guest_phone, '[template tes_booking_welcome] ' + first + ' · ' + (b.listing_name || '') + ' · ' + day] } },\n  meetText('Done. Maya is now looking after ' + first + ' (+' + b.guest_phone + ') for ' + (b.listing_name || 'the booking') + ', check-in ' + day + '. Welcome message sent.'),\n  { json: { kind: 'slack', body: { channel: C.SLACK_CHANNEL, text: '01B · Guest contact added · ' + (b.confirmation_code || '') + ' · ' + (b.listing_name || '') + ' · welcome sent on WhatsApp' } } }\n];"
+      }
+    },
+    {
+      "id": "b17",
+      "name": "Resolve escalation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [2420, -120],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH target AS (\n  SELECT id FROM airsynk.escalations WHERE status = 'open' ORDER BY created_at DESC LIMIT 1\n)\nUPDATE airsynk.escalations e\nSET status = CASE WHEN $1 = 'reject' THEN 'rejected' ELSE 'resolved' END,\n    resolution = $1,\n    final_reply = CASE WHEN $1 = 'approve' THEN e.draft_reply WHEN $1 = 'custom' THEN NULLIF($2, '') ELSE NULL END,\n    resolved_at = now()\nFROM target WHERE e.id = target.id\nRETURNING e.*;",
+        "options": { "queryReplacement": "={{ [$json.decision ?? 'approve', $json.custom_reply ?? ''] }}" }
+      }
+    },
+    {
+      "id": "b18",
+      "name": "Build decision messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, -120],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst url = C.WA_API + '/' + C.WA_PHONE_NUMBER_ID + '/messages';\nconst e = $input.first().json;\nconst meetText = t => ({ json: { kind: 'whatsapp', url, body: { messaging_product: 'whatsapp', to: C.MEET_WHATSAPP, type: 'text', text: { body: t } } } });\nif (!e || !e.id) return [meetText('Nothing is waiting for your decision right now.')];\nif (!e.final_reply) return [meetText('Okay, holding it. Nothing was sent to the guest.'), { json: { kind: 'slack', body: { channel: C.SLACK_CHANNEL, text: '01B · ' + e.id + ' held by Meet' } } }];\nreturn [\n  { json: { kind: 'whatsapp', url, body: { messaging_product: 'whatsapp', to: e.phone, type: 'text', text: { body: e.final_reply } } } },\n  { json: { kind: 'db', sql: \"INSERT INTO airsynk.messages (phone, direction, body) VALUES ($1, 'out', $2)\", params: [e.phone, e.final_reply] } },\n  meetText('Sent to the guest: \"' + e.final_reply.slice(0, 300) + '\"'),\n  { json: { kind: 'slack', body: { channel: C.SLACK_CHANNEL, text: '01B · ' + e.id + ' ' + e.resolution + ' by Meet → sent' } } }\n];"
+      }
+    },
+    {
+      "id": "b19",
+      "name": "Load booking + log inbound",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [880, 220],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO airsynk.messages (phone, direction, body, wa_msg_id, contact_name)\n  VALUES ($1, 'in', $2, $3, $4)\n  ON CONFLICT (wa_msg_id) DO NOTHING RETURNING id\n)\nSELECT\n  (SELECT count(*) FROM ins) AS inserted,\n  (SELECT row_to_json(x) FROM (\n     SELECT b.*, p.address, p.wifi_name, p.wifi_password, p.checkin_guide, p.house_rules\n     FROM airsynk.bookings b LEFT JOIN airsynk.properties p ON p.code = b.listing_code\n     WHERE b.guest_phone = $1 ORDER BY b.check_in DESC NULLS LAST LIMIT 1) x) AS booking,\n  COALESCE((SELECT json_agg(h ORDER BY h.created_at) FROM (\n     SELECT direction, body, created_at FROM airsynk.messages\n     WHERE phone = $1 ORDER BY created_at DESC LIMIT 12) h), '[]'::json) AS history;",
+        "options": { "queryReplacement": "={{ [$json.from, $json.text, $json.wa_msg_id, $json.name] }}" }
+      }
+    },
+    {
+      "id": "b20",
+      "name": "Prepare Maya",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 220],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst msg = $('Read message').first().json;\nconst row = $input.first().json;\nif (Number(row.inserted) === 0) return []; // Meta retried a message we already handled\nconst b = row.booking || {};\nconst SYSTEM = `You are Maya, the guest host of The Empire Stays: premium serviced apartments in Mumbai (Goregaon East) and Thane (near Korum Mall, TheWalk, Hiranandani, G-Corp). You talk to guests on WhatsApp.\n\nVoice: Ritz-Carlton Gold Standard. Warm, human, anticipatory, never robotic. English only. Use the guest's first name. Short WhatsApp-sized messages, no emoji walls, no markdown.\n\nFacts you may rely on:\n- Check-in from 2:00 PM. Early check-in from 12:30 PM only if the guest asks, subject to the turnover being ready.\n- Check-out by 11:00 AM. Never agree to anything later than 11:30 AM.\n- Discounts you may offer yourself: same-day booking 5%, 7–13 nights 7%, 14–27 nights 10%, 28+ nights 15%. Anything else: say you will check with the team.\n- Share the exact address only when a confirmed booking is on file below.\n- Use only the property details given below. If a detail is missing, say you will confirm it shortly. Never invent Wi-Fi passwords, codes or addresses.\n- Emergencies: police 100, ambulance 108, all emergencies 112.\n\nNever answer these yourself; set escalate=true: refund requests, payment disputes, legal threats, injury or safety issues, commercial shoots or events, discounts beyond the tiers, anything suspicious, complaints about cleanliness or broken essentials (AC, water, power, lock), and any guest who is angry.\nUrgency: critical = safety, emergency, guest locked out, no water/power at night; urgent = complaint during the stay, refund, checkout breach, angry guest; normal = needs Meet but can wait; none = routine.\n\nReply with ONE JSON object only:\n{\"reply\": string|null, \"holding_reply\": string|null, \"intent\": \"faq\"|\"checkin\"|\"checkout\"|\"amenity\"|\"directions\"|\"early_checkin\"|\"late_checkout\"|\"discount\"|\"complaint\"|\"refund\"|\"payment_dispute\"|\"legal\"|\"emergency\"|\"commercial\"|\"suspicious\"|\"other\", \"escalate\": boolean, \"urgency\": \"none\"|\"normal\"|\"urgent\"|\"critical\", \"summary_for_meet\": string}\nreply = the message you would send (also when escalating, as your suggested draft for Meet). holding_reply = a short, warm line to send now while the team checks (null for refund, payment_dispute, legal, commercial, suspicious). summary_for_meet = one or two plain sentences.`;\nconst ctx = b.id ? [\n  'Booking on file: ' + (b.listing_name || '?') + ' (' + (b.listing_code || '?') + '), ' + (b.check_in || '?') + ' → ' + (b.check_out || '?') + ', ' + (b.guests || '?') + ' guests, status ' + b.status + ', code ' + (b.confirmation_code || '?') + '.',\n  'Guest name: ' + (b.guest_name || b.guest_first_name || msg.name || 'unknown') + '.',\n  'Address: ' + (b.address || 'not on file') + '. Wi-Fi: ' + (b.wifi_name ? b.wifi_name + ' / ' + (b.wifi_password || '?') : 'not on file') + '.',\n  'Check-in guide: ' + (b.checkin_guide || 'not on file') + '. House rules: ' + (b.house_rules || 'not on file') + '.'\n].join('\\n') : 'No confirmed booking matches this number. Treat as an inquiry: be helpful, do not share any address, and invite them to book on Airbnb.';\nconst hist = (row.history || []).map(h => (h.direction === 'in' ? 'Guest: ' : 'Maya: ') + h.body).join('\\n');\nconst user = ctx + '\\n\\nConversation so far:\\n' + (hist || '(none)') + '\\n\\nNew WhatsApp message from ' + (msg.name || 'the guest') + ': ' + msg.text;\nreturn [{ json: { from: msg.from, name: msg.name, text: msg.text, booking: b, claudeRequest: { model: C.MODEL_BRAIN, max_tokens: 900, system: SYSTEM, messages: [{ role: 'user', content: user }] } } }];"
+      }
+    },
+    {
+      "id": "b21",
+      "name": "Claude · Maya brain",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, 220],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "anthropic-version", "value": "2023-06-01" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claudeRequest) }}",
+        "options": { "timeout": 90000 }
+      }
+    },
+    {
+      "id": "b22",
+      "name": "Decide actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 220],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst ctx = $('Prepare Maya').first().json;\nconst url = C.WA_API + '/' + C.WA_PHONE_NUMBER_ID + '/messages';\nconst txt = ($input.first().json.content || []).map(c => c.text || '').join('');\nlet d;\ntry { d = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); }\ncatch (e) { d = { reply: null, holding_reply: null, intent: 'other', escalate: true, urgency: 'normal', summary_for_meet: 'Maya could not read this message: ' + ctx.text }; }\nconst NO_REPLY = ['refund', 'payment_dispute', 'legal', 'commercial', 'suspicious'];\nconst urgency = d.urgency || 'none';\nconst escalate = !!d.escalate || NO_REPLY.includes(d.intent) || urgency === 'urgent' || urgency === 'critical';\nconst b = ctx.booking || {};\nconst guest = (b.guest_name || b.guest_first_name || ctx.name || ('+' + ctx.from));\nconst label = guest + ' · ' + (b.listing_name || 'no booking on file');\nconst out = [];\nconst waText = (to, body) => ({ json: { kind: 'whatsapp', url, body: { messaging_product: 'whatsapp', to, type: 'text', text: { body } } } });\nconst logOut = body => ({ json: { kind: 'db', sql: \"INSERT INTO airsynk.messages (phone, direction, body) VALUES ($1, 'out', $2)\", params: [ctx.from, body] } });\n\n// 1. What the guest gets right now\nlet guestText = null;\nif (!escalate && d.reply && C.AUTO_SEND) guestText = d.reply;\nelse if (d.intent === 'emergency') guestText = d.reply || 'Please call 112 right away if anyone is in danger. I am alerting our team this minute and we will call you back.';\nelse if (escalate && !NO_REPLY.includes(d.intent) && d.holding_reply) guestText = d.holding_reply;\nif (guestText) { out.push(waText(ctx.from, guestText)); out.push(logOut(guestText)); }\n\n// 2. What Meet gets: every escalation, and every draft while AUTO_SEND is off\nconst needsMeet = escalate || (!C.AUTO_SEND && d.reply);\nconst escId = 'esc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);\nif (needsMeet) {\n  out.push({ json: { kind: 'db', sql: 'INSERT INTO airsynk.escalations (id, phone, booking_id, intent, urgency, summary, draft_reply) VALUES ($1, $2, NULLIF($3, \\'\\')::bigint, $4, $5, $6, $7)', params: [escId, ctx.from, b.id ? String(b.id) : '', d.intent || 'other', urgency, d.summary_for_meet || ctx.text, d.reply || ''] } });\n  out.push({ json: { kind: 'whatsapp', url, body: {\n    messaging_product: 'whatsapp', to: C.MEET_WHATSAPP, type: 'template',\n    template: { name: 'tes_meet_alert', language: { code: 'en' }, components: [{ type: 'body', parameters: [\n      { type: 'text', text: escalate ? urgency.toUpperCase() : 'DRAFT' },\n      { type: 'text', text: label.slice(0, 120) },\n      { type: 'text', text: (d.summary_for_meet || ctx.text).slice(0, 600) },\n      { type: 'text', text: (d.reply || 'No reply drafted: policy says you decide.').slice(0, 600) }\n    ] }] }\n  } } });\n}\n\n// 3. Jarvis phones Meet for urgent and critical items\nif (escalate && (urgency === 'urgent' || urgency === 'critical')) {\n  const x = s => String(s || '').replace(/[<>&\"']/g, ' ');\n  const say = 'Hey Meet, this is Jarvis. ' + x(urgency) + ' item from ' + x(label) + '. ' + x(d.summary_for_meet) + (d.reply ? ' Maya suggests replying: ' + x(d.reply) + '.' : '') + ' Say approve to send it, hold to wait, or tell me what to say.';\n  const twiml = '<Response><Gather input=\"speech\" language=\"en-IN\" speechTimeout=\"auto\" method=\"POST\" action=\"' + C.N8N_PUBLIC_URL + '/webhook/tes-voice?esc=' + escId + '\"><Say voice=\"Polly.Raveena\" language=\"en-IN\">' + say + '</Say></Gather><Say voice=\"Polly.Raveena\" language=\"en-IN\">I did not catch that. The details are on your WhatsApp.</Say></Response>';\n  out.push({ json: { kind: 'call', accountSid: C.TWILIO_ACCOUNT_SID, to: C.MEET_PHONE_E164, from: C.TWILIO_FROM, twiml } });\n}\n\nout.push({ json: { kind: 'slack', body: { channel: C.SLACK_CHANNEL, text: '01B · ' + label + ' · intent ' + (d.intent || '?') + ' · urgency ' + urgency + (escalate ? ' · ESCALATED ' + escId : (guestText ? ' · Maya replied' : ' · draft to Meet')) } } });\nreturn out;"
+      }
+    },
+    {
+      "id": "b23",
+      "name": "Route action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [2860, 0],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "renameOutput": true, "outputKey": "WhatsApp", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "k1", "leftValue": "={{ $json.kind }}", "rightValue": "whatsapp", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Database", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "k2", "leftValue": "={{ $json.kind }}", "rightValue": "db", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Call Meet", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "k3", "leftValue": "={{ $json.kind }}", "rightValue": "call", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Slack", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "k4", "leftValue": "={{ $json.kind }}", "rightValue": "slack", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b24",
+      "name": "WhatsApp · send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, -200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "b25",
+      "name": "Postgres · write",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3100, -40],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": { "queryReplacement": "={{ $json.params }}" }
+      }
+    },
+    {
+      "id": "b26",
+      "name": "Twilio · call Meet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, 120],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.twilio.com/2010-04-01/Accounts/{{ $json.accountSid }}/Calls.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": { "parameters": [
+          { "name": "To", "value": "={{ $json.to }}" },
+          { "name": "From", "value": "={{ $json.from }}" },
+          { "name": "Twiml", "value": "={{ $json.twiml }}" }
+        ] },
+        "options": {}
+      }
+    },
+    {
+      "id": "b27",
+      "name": "Slack · ops feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, 280],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp webhook · verify": { "main": [[{ "node": "Check verify token", "type": "main", "index": 0 }]] },
+    "Check verify token": { "main": [[{ "node": "Return challenge", "type": "main", "index": 0 }]] },
+    "WhatsApp webhook · messages": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Read message", "type": "main", "index": 0 }]] },
+    "Read message": { "main": [[{ "node": "From Meet?", "type": "main", "index": 0 }]] },
+    "From Meet?": { "main": [
+      [{ "node": "Screenshot?", "type": "main", "index": 0 }],
+      [{ "node": "Load booking + log inbound", "type": "main", "index": 0 }]
+    ] },
+    "Screenshot?": { "main": [
+      [{ "node": "WhatsApp · media URL", "type": "main", "index": 0 }],
+      [{ "node": "Prepare Meet intent", "type": "main", "index": 0 }]
+    ] },
+    "WhatsApp · media URL": { "main": [[{ "node": "WhatsApp · download screenshot", "type": "main", "index": 0 }]] },
+    "WhatsApp · download screenshot": { "main": [[{ "node": "Prepare Meet intent", "type": "main", "index": 0 }]] },
+    "Prepare Meet intent": { "main": [[{ "node": "Claude · understand Meet", "type": "main", "index": 0 }]] },
+    "Claude · understand Meet": { "main": [[{ "node": "Parse Meet intent", "type": "main", "index": 0 }]] },
+    "Parse Meet intent": { "main": [[{ "node": "Meet wants", "type": "main", "index": 0 }]] },
+    "Meet wants": { "main": [
+      [{ "node": "Attach guest to booking", "type": "main", "index": 0 }],
+      [{ "node": "Resolve escalation", "type": "main", "index": 0 }]
+    ] },
+    "Attach guest to booking": { "main": [[{ "node": "Build welcome", "type": "main", "index": 0 }]] },
+    "Build welcome": { "main": [[{ "node": "Route action", "type": "main", "index": 0 }]] },
+    "Resolve escalation": { "main": [[{ "node": "Build decision messages", "type": "main", "index": 0 }]] },
+    "Build decision messages": { "main": [[{ "node": "Route action", "type": "main", "index": 0 }]] },
+    "Load booking + log inbound": { "main": [[{ "node": "Prepare Maya", "type": "main", "index": 0 }]] },
+    "Prepare Maya": { "main": [[{ "node": "Claude · Maya brain", "type": "main", "index": 0 }]] },
+    "Claude · Maya brain": { "main": [[{ "node": "Decide actions", "type": "main", "index": 0 }]] },
+    "Decide actions": { "main": [[{ "node": "Route action", "type": "main", "index": 0 }]] },
+    "Route action": { "main": [
+      [{ "node": "WhatsApp · send", "type": "main", "index": 0 }],
+      [{ "node": "Postgres · write", "type": "main", "index": 0 }],
+      [{ "node": "Twilio · call Meet", "type": "main", "index": 0 }],
+      [{ "node": "Slack · ops feed", "type": "main", "index": 0 }]
+    ] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "active": false
+}

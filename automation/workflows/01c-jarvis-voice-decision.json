@@ -1,0 +1,168 @@
+{
+  "name": "TES 01C · Jarvis call → Meet answers by voice → act",
+  "nodes": [
+    {
+      "id": "v1",
+      "name": "Twilio · Meet speaks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "tes-voice",
+      "parameters": { "httpMethod": "POST", "path": "tes-voice", "responseMode": "responseNode", "options": {} }
+    },
+    {
+      "id": "v2",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "const CONFIG = {\n  MEET_WHATSAPP: '91XXXXXXXXXX',\n  WA_PHONE_NUMBER_ID: 'XXXXXXXXXXXXXXX',\n  WA_API: 'https://graph.facebook.com/v21.0',\n  SLACK_CHANNEL: 'C0AKT2RDQNA',\n  MODEL_FAST: 'claude-haiku-4-5-20251001'\n};\nconst q = $json.query || {};\nconst b = $json.body || {};\nreturn [{ json: { CONFIG, escId: String(q.esc || ''), speech: String(b.SpeechResult || '').trim() } }];"
+      }
+    },
+    {
+      "id": "v3",
+      "name": "Load escalation",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 0],
+      "alwaysOutputData": true,
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM airsynk.escalations WHERE id = $1 AND status = 'open';",
+        "options": { "queryReplacement": "={{ [$json.escId] }}" }
+      }
+    },
+    {
+      "id": "v4",
+      "name": "Prepare voice intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0],
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst e = $input.first().json || {};\nconst prompt = [\n  'Meet (owner of The Empire Stays) just answered a phone call from Jarvis by voice. Speech-to-text may contain errors.',\n  'Pending item: ' + (e.summary || 'unknown') + '. Maya\\'s suggested reply to the guest: ' + (e.draft_reply || '(none)') + '.',\n  'Meet said: \"' + cfg.speech + '\"',\n  'Return one JSON object only: {\"decision\":\"approve\"|\"reject\"|\"custom\"|\"unclear\", \"custom_reply\": string|null, \"spoken_confirmation\": string}',\n  'custom_reply = the final guest-facing WhatsApp message in Maya\\'s warm voice when Meet dictates something different.',\n  'spoken_confirmation = one short sentence Jarvis says back to Meet.'\n].join('\\n');\nreturn [{ json: { found: !!e.id, claudeRequest: { model: cfg.CONFIG.MODEL_FAST, max_tokens: 500, messages: [{ role: 'user', content: prompt }] } } }];"
+      }
+    },
+    {
+      "id": "v5",
+      "name": "Claude · understand Meet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "anthropic-version", "value": "2023-06-01" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claudeRequest) }}",
+        "options": { "timeout": 20000 }
+      }
+    },
+    {
+      "id": "v6",
+      "name": "Apply decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0],
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst C = cfg.CONFIG;\nconst e = $('Load escalation').first().json || {};\nconst url = C.WA_API + '/' + C.WA_PHONE_NUMBER_ID + '/messages';\nconst txt = ($input.first().json.content || []).map(c => c.text || '').join('');\nlet d = { decision: 'unclear', spoken_confirmation: 'Sorry, I did not get that. I have left it on your WhatsApp.' };\ntry { d = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); } catch (err) {}\nconst x = s => String(s || '').replace(/[<>&\"']/g, ' ');\nconst out = [];\nlet say = d.spoken_confirmation || 'Done.';\nif (!e.id) {\n  say = 'That item is already closed. Nothing else to do.';\n} else {\n  const finalReply = d.decision === 'approve' ? e.draft_reply : (d.decision === 'custom' ? d.custom_reply : null);\n  if (d.decision !== 'unclear') {\n    out.push({ json: { kind: 'db', sql: \"UPDATE airsynk.escalations SET status = $2, resolution = $3, final_reply = NULLIF($4, ''), resolved_at = now() WHERE id = $1\", params: [e.id, d.decision === 'reject' ? 'rejected' : 'resolved', 'voice_' + d.decision, finalReply || ''] } });\n  }\n  if (finalReply) {\n    out.push({ json: { kind: 'whatsapp', url, body: { messaging_product: 'whatsapp', to: e.phone, type: 'text', text: { body: finalReply } } } });\n    out.push({ json: { kind: 'db', sql: \"INSERT INTO airsynk.messages (phone, direction, body) VALUES ($1, 'out', $2)\", params: [e.phone, finalReply] } });\n  }\n  out.push({ json: { kind: 'slack', body: { channel: C.SLACK_CHANNEL, text: '01C · ' + e.id + ' · Meet by voice: ' + d.decision + (finalReply ? ' → sent to guest' : '') } } });\n}\nout.push({ json: { kind: 'twiml', twiml: '<Response><Say voice=\"Polly.Raveena\" language=\"en-IN\">' + x(say) + '</Say></Response>' } });\nreturn out;"
+      }
+    },
+    {
+      "id": "v7",
+      "name": "Route action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1320, 0],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "renameOutput": true, "outputKey": "Speak back", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "t1", "leftValue": "={{ $json.kind }}", "rightValue": "twiml", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "WhatsApp", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "t2", "leftValue": "={{ $json.kind }}", "rightValue": "whatsapp", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Database", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "t3", "leftValue": "={{ $json.kind }}", "rightValue": "db", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Slack", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "t4", "leftValue": "={{ $json.kind }}", "rightValue": "slack", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "v8",
+      "name": "Speak back to Meet",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1560, -200],
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.twiml }}",
+        "options": { "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "text/xml" }] } }
+      }
+    },
+    {
+      "id": "v9",
+      "name": "WhatsApp · send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, -40],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "v10",
+      "name": "Postgres · write",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1560, 120],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.sql }}",
+        "options": { "queryReplacement": "={{ $json.params }}" }
+      }
+    },
+    {
+      "id": "v11",
+      "name": "Slack · ops feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 280],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Twilio · Meet speaks": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Load escalation", "type": "main", "index": 0 }]] },
+    "Load escalation": { "main": [[{ "node": "Prepare voice intent", "type": "main", "index": 0 }]] },
+    "Prepare voice intent": { "main": [[{ "node": "Claude · understand Meet", "type": "main", "index": 0 }]] },
+    "Claude · understand Meet": { "main": [[{ "node": "Apply decision", "type": "main", "index": 0 }]] },
+    "Apply decision": { "main": [[{ "node": "Route action", "type": "main", "index": 0 }]] },
+    "Route action": { "main": [
+      [{ "node": "Speak back to Meet", "type": "main", "index": 0 }],
+      [{ "node": "WhatsApp · send", "type": "main", "index": 0 }],
+      [{ "node": "Postgres · write", "type": "main", "index": 0 }],
+      [{ "node": "Slack · ops feed", "type": "main", "index": 0 }]
+    ] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "active": false
+}

@@ -1,0 +1,156 @@
+{
+  "name": "TES 01A · Airbnb booking confirmed → ask Meet for guest contact",
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Airbnb confirmation email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "simple": false,
+        "filters": { "q": "from:(airbnb.com) subject:(\"Reservation confirmed\" OR \"Booking confirmed\") newer_than:2d" },
+        "options": {}
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "jsCode": "// Edit these once. Secrets (API keys, tokens) live in n8n Credentials, never here.\nconst CONFIG = {\n  MEET_WHATSAPP: '91XXXXXXXXXX',          // Meet's WhatsApp number: country code + number, no +\n  WA_PHONE_NUMBER_ID: 'XXXXXXXXXXXXXXX',  // Meta WhatsApp Cloud API → phone number ID\n  WA_API: 'https://graph.facebook.com/v21.0',\n  SLACK_CHANNEL: 'C0AKT2RDQNA',\n  MODEL_FAST: 'claude-haiku-4-5-20251001'\n};\nreturn $input.all().map(i => ({ json: { ...i.json, CONFIG } }));"
+      }
+    },
+    {
+      "id": "a3",
+      "name": "Prepare extraction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0],
+      "parameters": {
+        "jsCode": "return $input.all().map(i => {\n  const C = i.json.CONFIG;\n  const body = String(i.json.text || i.json.textAsHtml || i.json.html || '').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ').slice(0, 12000);\n  return { json: {\n    emailId: i.json.id,\n    subject: i.json.subject,\n    claudeRequest: {\n      model: C.MODEL_FAST,\n      max_tokens: 600,\n      system: 'You extract Airbnb reservation details from host confirmation emails for The Empire Stays. Reply with one JSON object and nothing else.',\n      messages: [{ role: 'user', content: 'Subject: ' + i.json.subject + '\\n\\n' + body + '\\n\\nReturn JSON with keys: confirmation_code (string), guest_first_name (string), listing_name (string, as written in the email), check_in (YYYY-MM-DD), check_out (YYYY-MM-DD), guests (number), payout_inr (number, host payout in rupees). Use null for anything not in the email.' }]\n    }\n  } };\n});"
+      }
+    },
+    {
+      "id": "a4",
+      "name": "Claude · extract booking",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "anthropic-version", "value": "2023-06-01" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claudeRequest) }}",
+        "options": { "timeout": 60000 }
+      }
+    },
+    {
+      "id": "a5",
+      "name": "Parse booking",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "parameters": {
+        "jsCode": "const PORTFOLIO = [\n  { code: 'OS A2106', name: 'White Island*21', keys: ['white island'] },\n  { code: 'Sol C 2103', name: 'Coastline Studio*21', keys: ['coastline'] },\n  { code: 'PCR T5 1901', name: 'Heaven*19', keys: ['heaven'] },\n  { code: 'PCR T4 3507', name: 'NYC*35', keys: ['nyc'] },\n  { code: 'JG T1 1402', name: 'Paradise*142', keys: ['paradise*142', 'paradise 142', 'paradise °142', '142'] },\n  { code: 'JG T1 1404', name: 'Paradise*144', keys: ['paradise*144', 'paradise 144', 'paradise °144', '144'] },\n  { code: 'PCE T4 3006', name: 'Sky*30', keys: ['sky*30', 'sky 30', 'sky °30'] },\n  { code: 'PRP3 S2 1701', name: 'Sky Escape', keys: ['sky escape'] },\n  { code: 'RBA1704', name: 'Terra Blush*17', keys: ['terra blush'] },\n  { code: 'SKYLINE', name: 'Skyline Hideaway', keys: ['skyline'] }\n];\nconst prev = $('Prepare extraction').all();\nreturn $input.all().map((it, idx) => {\n  const txt = (it.json.content || []).map(c => c.text || '').join('');\n  let b = {};\n  try { b = JSON.parse(txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1)); } catch (e) { b = { parse_error: true }; }\n  const name = String(b.listing_name || '').toLowerCase();\n  const hit = PORTFOLIO.find(p => p.keys.some(k => name.includes(k)));\n  return { json: {\n    confirmation_code: b.confirmation_code || null,\n    guest_first_name: b.guest_first_name || null,\n    listing_display: hit ? hit.name : (b.listing_name || 'Unknown listing'),\n    listing_code: hit ? hit.code : null,\n    check_in: b.check_in || null,\n    check_out: b.check_out || null,\n    guests: b.guests == null ? null : b.guests,\n    payout_inr: b.payout_inr == null ? null : b.payout_inr,\n    email_id: prev[idx] ? prev[idx].json.emailId : null\n  } };\n});"
+      }
+    },
+    {
+      "id": "a6",
+      "name": "Save booking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1100, 0],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO airsynk.bookings (confirmation_code, guest_first_name, listing_name, listing_code, check_in, check_out, guests, payout_inr, source_email_id, status)\nVALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::date, NULLIF($6, '')::date, NULLIF($7, '')::int, NULLIF($8, '')::numeric, $9, 'awaiting_guest_contact')\nON CONFLICT (confirmation_code) DO UPDATE SET updated_at = now()\nRETURNING *, (xmax = 0) AS is_new;",
+        "options": {
+          "queryReplacement": "={{ [$json.confirmation_code, $json.guest_first_name, $json.listing_display, $json.listing_code ?? '', $json.check_in ?? '', $json.check_out ?? '', $json.guests == null ? '' : String($json.guests), $json.payout_inr == null ? '' : String($json.payout_inr), $json.email_id] }}"
+        }
+      }
+    },
+    {
+      "id": "a7",
+      "name": "Build Meet alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0],
+      "parameters": {
+        "jsCode": "const C = $('Config').first().json.CONFIG;\nconst fmt = d => d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' }) : '?';\nconst out = [];\nfor (const it of $input.all()) {\n  const b = it.json;\n  if (!b.is_new) continue; // same email polled twice: stay quiet\n  const dates = fmt(b.check_in) + ' → ' + fmt(b.check_out) + (b.guests ? ' · ' + b.guests + ' guests' : '');\n  out.push({ json: {\n    kind: 'whatsapp',\n    url: C.WA_API + '/' + C.WA_PHONE_NUMBER_ID + '/messages',\n    body: {\n      messaging_product: 'whatsapp',\n      to: C.MEET_WHATSAPP,\n      type: 'template',\n      template: {\n        name: 'tes_new_booking_alert',\n        language: { code: 'en' },\n        components: [{ type: 'body', parameters: [\n          { type: 'text', text: b.listing_name || 'New listing' },\n          { type: 'text', text: b.guest_first_name || 'Guest' },\n          { type: 'text', text: dates },\n          { type: 'text', text: b.confirmation_code || 'n/a' }\n        ] }]\n      }\n    }\n  } });\n  out.push({ json: {\n    kind: 'slack',\n    body: { channel: C.SLACK_CHANNEL, text: '01A · New booking ' + (b.confirmation_code || '') + ' · ' + (b.listing_name || '') + ' · ' + (b.guest_first_name || '') + ' · ' + dates + ' → asked Meet for guest WhatsApp' }\n  } });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "a8",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1540, 0],
+      "parameters": {
+        "rules": {
+          "values": [
+            { "renameOutput": true, "outputKey": "WhatsApp", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "r1", "leftValue": "={{ $json.kind }}", "rightValue": "whatsapp", "operator": { "type": "string", "operation": "equals" } }] } },
+            { "renameOutput": true, "outputKey": "Slack", "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "combinator": "and", "conditions": [{ "id": "r2", "leftValue": "={{ $json.kind }}", "rightValue": "slack", "operator": { "type": "string", "operation": "equals" } }] } }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a9",
+      "name": "WhatsApp · send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "a10",
+      "name": "Slack · ops feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, 100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Airbnb confirmation email": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Prepare extraction", "type": "main", "index": 0 }]] },
+    "Prepare extraction": { "main": [[{ "node": "Claude · extract booking", "type": "main", "index": 0 }]] },
+    "Claude · extract booking": { "main": [[{ "node": "Parse booking", "type": "main", "index": 0 }]] },
+    "Parse booking": { "main": [[{ "node": "Save booking", "type": "main", "index": 0 }]] },
+    "Save booking": { "main": [[{ "node": "Build Meet alert", "type": "main", "index": 0 }]] },
+    "Build Meet alert": { "main": [[{ "node": "Route", "type": "main", "index": 0 }]] },
+    "Route": { "main": [
+      [{ "node": "WhatsApp · send", "type": "main", "index": 0 }],
+      [{ "node": "Slack · ops feed", "type": "main", "index": 0 }]
+    ] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Kolkata" },
+  "active": false
+}

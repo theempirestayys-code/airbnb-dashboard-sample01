@@ -1,0 +1,8 @@
+node_modules/
+.next/
+out/
+android/app/build/
+android/.gradle/
+*.tsbuildinfo
+.env*
+.DS_Store
