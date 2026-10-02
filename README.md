@@ -65,7 +65,51 @@ Replies wait for Meet's approval by default (`AUTO_SEND=false`). Refunds, legal 
 ```
 app/            routes (/, /dashboard, /data-builder, /m) + globals.css (design tokens)
 components/     ui.tsx (Nav, Chip, Delta, Segmented), JarvisVoice.tsx
-lib/            portfolio.ts (data + KPI maths), agents.ts, jarvis.ts (local voice answers)
+lib/            portfolio.ts (data + KPI maths), agents.ts, jarvis.ts (built-in rule brain)
+jarvis/         local swarm brain: llm.ts (any OpenAI-compatible API), team.ts, data.ts, swarm.ts, server.ts
+mcp/            server.ts: Empire Jarvis MCP server (registered in .mcp.json)
 automation/     n8n workflows, Postgres schema, setup guide
 design/         tokens.json
+.github/        workflows/pages.yml: deploys to GitHub Pages on every push to main
 ```
+
+## Live site
+
+Every push to `main` builds and deploys to GitHub Pages: **https://theempirestayys-code.github.io/airbnb-dashboard-sample01/**. The public site always shows sample data and uses the built-in rule brain.
+
+## Jarvis swarm (local)
+
+The voice home talks to a local brain when one is running on your Mac. Without one, it uses the built-in rule brain.
+
+```
+Meet speaks → Jarvis (browser voice) → 127.0.0.1:8787 → Maya plans
+   → 1–4 agents in parallel (each with its own role card, SOP and data slice)
+   → Maya merges one answer → Jarvis speaks it
+```
+
+```bash
+cp .env.example .env     # then paste your OpenRouter key into LLM_API_KEY
+npm run jarvis           # http://127.0.0.1:8787/health
+npm run dev              # open http://localhost:3000 and tap the orb
+```
+
+- **Provider:** any OpenAI-compatible API. The default is OpenRouter: `x-ai/grok-4.7` for Maya and Arjun, and `x-ai/grok-4.3` for the other 12 agents. To use xAI, OpenAI or a local Ollama server, change `LLM_BASE_URL`, the key and the model names in `.env`.
+- **Team:** the 14 ERA 2.0 agents. Their role cards and SOPs are read at runtime from the local `ERA2_Build/04_Agents` folder and are never copied into this repo. Without that folder, Jarvis uses a roster with names only.
+- **Data:** each agent reads only its own scopes (see `READS` in `jarvis/team.ts`). Real figures come from the local ERA 2.0 `portfolio.json`, otherwise sample data, and every slice says which. Owner names and Airbnb listing IDs are removed before anything goes to the model provider. Set `TES_DATA=sample` to force sample data.
+- **Guardrails:** agents only propose. Moving money, publishing prices, refunds, owner payouts and guest or owner messages always come back as decisions for Meet.
+- **Security:** the brain listens on `127.0.0.1` only, accepts JSON from allow-listed origins only, and your key stays in `.env`, which git ignores.
+
+## MCP server
+
+`.mcp.json` registers `empire-jarvis` for Claude Code in this folder. To add it to Claude Desktop, add the same entry with `"cwd"` set to this folder.
+
+| Tool | What it does | Needs key |
+|---|---|---|
+| `jarvis_status` | Shows whether the swarm is on, plus the provider, models, data source and team source | no |
+| `list_agents` | Lists the 14 agents: seat, mission, autonomy, model tier, data scopes | no |
+| `get_agent_skill` | One agent's role card and full SOP | no |
+| `get_agent_data` | Exactly the data one agent may read | no |
+| `get_data` | One scope: kpis, listings, money, channels, approvals, team, today, feeds, pipeline, compliance | no |
+| `jarvis_quick_answer` | Instant rule-brain answer from sample data | no |
+| `ask_agent` | Gives one agent a task and returns its answer in role | yes |
+| `run_swarm` | Runs the full swarm and returns the plan, each agent's output and the final reply | yes |

@@ -6,3 +6,4 @@ android/.gradle/
 *.tsbuildinfo
 .env*
 .DS_Store
+!.env.example

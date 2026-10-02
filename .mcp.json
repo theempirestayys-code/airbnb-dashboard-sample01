@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "empire-jarvis": {
+      "command": "npx",
+      "args": ["tsx", "mcp/server.ts"]
+    }
+  }
+}

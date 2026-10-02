@@ -4,7 +4,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { answer } from '@/lib/jarvis';
 import { MicIcon } from './ui';
 
-type Line = { who: 'Meet' | 'Jarvis'; text: string };
+type Line = { who: 'Meet' | 'Jarvis'; text: string; agents?: string[] };
+type Brain = { swarm: boolean; lead: string; data: string } | null;
+
+// Local swarm brain (npm run jarvis). Only reachable on Meet's own machine; everyone else gets the built-in brain.
+const BRAIN_URL = 'http://127.0.0.1:8787';
+
+async function askSwarm(text: string): Promise<{ reply: string; agents: string[] } | null> {
+  try {
+    const res = await fetch(`${BRAIN_URL}/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(90_000) });
+    if (!res.ok) return null;
+    const out = await res.json() as { reply: string; results: { name: string; ok: boolean }[] };
+    return { reply: out.reply, agents: out.results.filter(r => r.ok).map(r => r.name) };
+  } catch { return null; }
+}
 type Mode = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 // Minimal typing for the Web Speech API (not in TypeScript's DOM lib everywhere).
@@ -21,6 +34,7 @@ export default function JarvisVoice() {
   const [lines, setLines] = useState<Line[]>([]);
   const [mode, setMode] = useState<Mode>('idle');
   const [supported, setSupported] = useState(false);
+  const [brain, setBrain] = useState<Brain>(null);
   const recRef = useRef<Recognition | null>(null);
 
   useEffect(() => {
@@ -34,14 +48,19 @@ export default function JarvisVoice() {
       recRef.current = r;
       setSupported(true);
     }
+    fetch(`${BRAIN_URL}/health`, { signal: AbortSignal.timeout(1500) })
+      .then(r => r.json())
+      .then((h: { swarm: boolean; lead: string; data: string }) => setBrain(h))
+      .catch(() => setBrain(null));
   }, []);
 
-  const respond = useCallback((question: string) => {
+  const respond = useCallback(async (question: string) => {
     setLines(prev => [...prev, { who: 'Meet' as const, text: question }].slice(-6));
     setMode('thinking');
-    const reply = answer(question);
+    const swarm = brain?.swarm ? await askSwarm(question) : null;
+    const reply = swarm?.reply || answer(question);
     window.setTimeout(() => {
-      setLines(prev => [...prev, { who: 'Jarvis' as const, text: reply }].slice(-6));
+      setLines(prev => [...prev, { who: 'Jarvis' as const, text: reply, agents: swarm?.agents }].slice(-6));
       if ('speechSynthesis' in window) {
         const u = new SpeechSynthesisUtterance(reply);
         u.lang = 'en-IN';
@@ -53,8 +72,8 @@ export default function JarvisVoice() {
       } else {
         setMode('idle');
       }
-    }, 450);
-  }, []);
+    }, swarm ? 0 : 450);
+  }, [brain]);
 
   const listen = useCallback(() => {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel(); // barge-in: talking over Jarvis stops it
@@ -97,13 +116,16 @@ export default function JarvisVoice() {
       <div style={{ width: '100%', maxWidth: 560, background: 'var(--ec-glass)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 20, display: 'flex', flexDirection: 'column', gap: 14, boxShadow: 'var(--ec-shadow)' }} aria-live="polite">
         <div className="row between">
           <span className="label">{supported ? 'Live voice · en-IN' : 'Demo · voice not supported in this browser'}</span>
-          <span className="mono faint" style={{ fontSize: 12 }}>sample data</span>
+          <span className="mono faint" style={{ fontSize: 12 }} title={brain ? `${brain.lead} · ${brain.data}` : 'Run npm run jarvis for the agent swarm'}>
+            {brain?.swarm ? `swarm · ${brain.data.startsWith('real') ? 'real data' : 'sample data'}` : 'sample data'}
+          </span>
         </div>
         {lines.length === 0 && <span className="faint" style={{ fontSize: 15 }}>Tap the orb and say &ldquo;Hey Jarvis, anything urgent?&rdquo;</span>}
         {lines.map((l, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: l.who === 'Meet' ? 'flex-end' : 'flex-start' }}>
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: l.who === 'Meet' ? 'var(--ec-gold-200)' : 'var(--ec-voice-fg)' }}>{l.who}</span>
             <span style={{ maxWidth: '92%', padding: '10px 14px', borderRadius: 14, fontSize: 15, lineHeight: 1.5, background: l.who === 'Meet' ? 'rgba(201,169,110,0.18)' : 'rgba(6,182,212,0.12)' }}>{l.text}</span>
+            {l.agents && l.agents.length > 0 && <span className="mono faint" style={{ fontSize: 11 }}>via {l.agents.join(' · ')}</span>}
           </div>
         ))}
         <div className="row wrap" style={{ gap: 8 }}>
