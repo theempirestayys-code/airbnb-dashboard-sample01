@@ -11,7 +11,8 @@
     "cap:add": "npx cap add android",
     "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android",
-    "build:apk": "next build && npx cap sync android && cd android && ./gradlew assembleDebug"
+    "build:apk": "next build && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "build:html": "node scripts/build-html.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",
@@ -25,6 +26,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.0"
   }
 }
