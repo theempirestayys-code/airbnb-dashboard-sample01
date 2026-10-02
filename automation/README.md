@@ -19,7 +19,7 @@ Meet answers the call by voice ("approve", "hold", or "tell her the AC man is co
 Meet can also just reply "send" / "hold" / dictate on WhatsApp → same result.
 ```
 
-Every run posts a one-line summary to Slack `#all-the-empire-stayys` (C0AKT2RDQNA).
+Every run posts a one-line summary to Slack `#all-the-empire-stayys` (set `SLACK_CHANNEL` in each `Config` node).
 
 ## Files
 
@@ -32,7 +32,7 @@ Every run posts a one-line summary to Slack `#all-the-empire-stayys` (C0AKT2RDQN
 
 ## Setup, in order
 
-1. **Server up and on HTTPS.** n8n at `http://34.14.139.125:5678` did not answer from the cloud session (the GCP free trial ended 2026-09-03, so the VM may be stopped). Upgrade billing and start the VM. Then point a domain such as `n8n.theempirestayys.com` at the IP and put Caddy in front. Meta and Twilio only call HTTPS webhooks. Set `WEBHOOK_URL=https://n8n.<domain>/` in the n8n container.
+1. **Server up and on HTTPS.** Make sure your n8n VM is running. Then point a domain such as `n8n.theempirestayys.com` at the server and put Caddy in front. Meta and Twilio only call HTTPS webhooks. Set `WEBHOOK_URL=https://n8n.<domain>/` in the n8n container.
 2. **Database.** Run `db/schema.sql` once against the Postgres container. Then fill `airsynk.properties` with each unit's address, Wi-Fi, check-in guide and house rules. Maya only says what is in this table.
 3. **Credentials in n8n** (Settings → Credentials). You type the secrets; Claude never does.
 
@@ -43,7 +43,7 @@ Every run posts a one-line summary to Slack `#all-the-empire-stayys` (C0AKT2RDQN
    | `Slack bot` | Header Auth | Name `Authorization`, Value `Bearer xoxb-…` (scope `chat:write`, bot invited to the channel) |
    | `Twilio` | Basic Auth | User = Account SID, Password = Auth Token |
    | `Airsynk Postgres` | Postgres | host `postgres`, the compose DB user/password |
-   | `Gmail` | Gmail OAuth2 | Google OAuth client in project `tes-airsynk-rag`; redirect `https://n8n.<domain>/rest/oauth2-credential/callback` |
+   | `Gmail` | Gmail OAuth2 | Google OAuth client in your GCP project; redirect `https://n8n.<domain>/rest/oauth2-credential/callback` |
 
 4. **Import** the three JSON files (Workflows → Import from file). In each HTTP node choose the matching credential: Anthropic, WhatsApp, Slack or Twilio by node name. Then fill the `Config` node in each workflow with Meet's numbers, the WhatsApp phone number ID, the Twilio number and the public n8n URL.
 5. **Meta webhook.** In the WhatsApp app go to Configuration → Webhook. Set the callback to `https://n8n.<domain>/webhook/tes-wa` and the verify token to the string in the `Check verify token` node. Subscribe to `messages`.
@@ -66,7 +66,7 @@ Every run posts a one-line summary to Slack `#all-the-empire-stayys` (C0AKT2RDQN
 
 ## Safety switches
 
-- `AUTO_SEND` in 01B `Config` is **false**. Every guest reply waits for Meet until he flips it, following the draft-only convention in airsynk-cloud-ops.
+- `AUTO_SEND` in 01B `Config` is **false**. Every guest reply waits for Meet's approval until it is switched on, following the draft-only convention in airsynk-cloud-ops.
 - Refunds, payment disputes, legal threats, commercial shoots and anything suspicious never get an automatic reply, whatever `AUTO_SEND` says. This is enforced in code, not only in the prompt.
 - Maya never invents addresses, Wi-Fi details or codes. If a value is missing from `airsynk.properties`, she says she will confirm.
 - `send` approves the **latest** open item. With several open items, Meet should dictate the reply or use the voice call, which is tied to one item id.
