@@ -13,6 +13,10 @@ Command center for **The Empire Stays** (Airbnb, Mumbai + Thane, India): a voice
 | `/data-builder` | Sources → unified model → live metric builder with the working shown, plus prioritised build suggestions (Goal 1–4). |
 | `/m` | Field app for the APK: Today, Money, Units, and Agents & approvals tabs. |
 
+## Open it without installing anything
+
+Download `dist/empire-command.html` and double-click it. The whole app (Jarvis, Dashboard, Data builder, Mobile) is in that one file and runs from your disk. Use Chrome for the voice orb. Rebuild it after code changes with `npm run build:html`.
+
 ## Run it
 
 ```bash

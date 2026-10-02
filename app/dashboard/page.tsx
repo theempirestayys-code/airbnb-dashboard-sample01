@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { Chip, Delta, MicIcon, Nav, SampleBadge, Segmented } from '@/components/ui';
 import { AGENTS, DECISIONS } from '@/lib/agents';
@@ -87,7 +88,7 @@ export default function Dashboard() {
         </div>
         <div className="row wrap">
           <SampleBadge />
-          <a href="/" className="voice-btn" style={{ textDecoration: 'none' }}><span className="voice-dot"><MicIcon /></span><span style={{ fontSize: 14, fontWeight: 500 }}>Ask Jarvis</span></a>
+          <Link href="/" className="voice-btn" style={{ textDecoration: 'none' }}><span className="voice-dot"><MicIcon /></span><span style={{ fontSize: 14, fontWeight: 500 }}>Ask Jarvis</span></Link>
         </div>
       </div>
       <div className="row wrap between">
